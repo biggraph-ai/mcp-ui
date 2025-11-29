@@ -171,9 +171,13 @@ export function createServer() {
       let plan = '';
       let review = '';
       let finalHtml = '';
+      let lastStage: AgentStage | null = null;
 
       try {
         for (const stage of chainConfig.stages) {
+          lastStage = stage;
+          logStageProgress(stage, 'starting stage');
+
           const messages = buildStageMessages({
             stage,
             prompt: composedPrompt,
@@ -181,7 +185,12 @@ export function createServer() {
             review,
           });
 
+          logStageProgress(stage, 'invoking model');
           const responseText = await invokeModel(stage, messages);
+
+          logStageProgress(stage, 'received model response', {
+            characters: responseText.length,
+          });
 
           if (stage.role === 'planner') {
             plan = responseText;
@@ -190,6 +199,12 @@ export function createServer() {
           } else {
             finalHtml = sanitizeHtml(responseText);
           }
+
+          logStageProgress(stage, 'completed stage update', {
+            hasPlan: Boolean(plan),
+            hasReview: Boolean(review),
+            hasFinalHtml: Boolean(finalHtml),
+          });
         }
 
         if (!finalHtml) {
@@ -204,12 +219,20 @@ export function createServer() {
 
         return { content: [uiResource] };
       } catch (error) {
+        logStageProgress(lastStage, 'error encountered', {
+          error: error instanceof Error ? error.message : String(error),
+        });
         console.error('generateUiHtml chain error:', error);
+
+        const failingStageDetails = lastStage
+          ? `<p style="color: #b91c1c;">Failure at stage: <strong>${lastStage.label}</strong> (${lastStage.provider} - ${lastStage.model})</p>`
+          : '';
 
         const friendlyHtml = `
           <section style="font-family: sans-serif; padding: 16px; border: 1px solid #fecdd3; background: #fff1f2; border-radius: 12px; max-width: 520px; margin: 0 auto; color: #9f1239;">
             <h3 style="margin-top: 0;">We couldn\'t generate your UI</h3>
             <p style="color: #b91c1c;">Please try again or adjust your prompt. If the issue persists, check model credentials and network access.</p>
+            ${failingStageDetails}
           </section>
         `;
 
@@ -312,6 +335,31 @@ const DEFAULT_MODEL_TIMEOUT_MS = (() => {
 })();
 
 const MODEL_DEBUG_LOGGING = String(process.env.MODEL_DEBUG_LOGGING ?? '').toLowerCase() === 'true';
+
+function logStageProgress(stage: AgentStage | null, step: string, details?: Record<string, unknown>) {
+  const parts = ['[generateUiHtml]'];
+
+  if (stage) {
+    parts.push(`stage=${stage.id}`, `provider=${stage.provider}`, `model=${stage.model}`);
+  } else {
+    parts.push('stage=unknown');
+  }
+
+  const message = `${parts.join(' ')} ${step}`;
+
+  if (details && Object.keys(details).length) {
+    const sanitized = Object.fromEntries(Object.entries(details).filter(([, value]) => value !== undefined));
+
+    try {
+      console.info(`${message} ${JSON.stringify(sanitized)}`);
+      return;
+    } catch {
+      // If serialization fails, fall through to a basic log.
+    }
+  }
+
+  console.info(message);
+}
 
 function buildStageMessages({
   stage,
