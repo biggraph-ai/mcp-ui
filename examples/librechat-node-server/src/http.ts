@@ -22,21 +22,19 @@ const transports: Record<string, StreamableHTTPServerTransport> = {};
 
 app.post('/mcp/ui/messages', async (req, res) => {
   const sessionId = req.headers['mcp-session-id'] as string | undefined;
-  let transport: StreamableHTTPServerTransport;
+  let transport = sessionId ? transports[sessionId] : undefined;
 
-  if (sessionId && transports[sessionId]) {
-    transport = transports[sessionId];
-  } else if (!sessionId && isInitializeRequest(req.body)) {
+  if (!transport && isInitializeRequest(req.body)) {
     transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
       onsessioninitialized: (sid) => {
-        transports[sid] = transport;
+        transports[sid] = transport!;
         console.log(`MCP Session initialized: ${sid}`);
       },
     });
 
     transport.onclose = () => {
-      if (transport.sessionId) {
+      if (transport?.sessionId) {
         console.log(`MCP Session closed: ${transport.sessionId}`);
         delete transports[transport.sessionId];
       }
@@ -44,16 +42,21 @@ app.post('/mcp/ui/messages', async (req, res) => {
 
     const server = createServer();
     await server.connect(transport);
-  } else {
+  }
+
+  if (!transport) {
     return res.status(400).json({ error: { message: 'Bad Request: No valid session ID provided' } });
   }
 
-  await transport.handleRequest(req, res, req.body);
+  return transport.handleRequest(req, res, req.body);
 });
 
 const handleSessionRequest = async (req: express.Request, res: express.Response) => {
   const sessionId = req.headers['mcp-session-id'] as string | undefined;
-  if (!sessionId || !transports[sessionId]) {
+  if (!sessionId) {
+    return res.status(405).send('Initialize first to get a session id');
+  }
+  if (!transports[sessionId]) {
     return res.status(404).send('Session not found');
   }
 
