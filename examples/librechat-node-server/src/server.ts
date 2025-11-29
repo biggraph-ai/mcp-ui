@@ -306,6 +306,11 @@ const providerBaseUrls: Record<ModelProvider, string> = {
   qwen: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
 };
 
+const DEFAULT_MODEL_TIMEOUT_MS = (() => {
+  const parsed = Number(process.env.MODEL_REQUEST_TIMEOUT_MS ?? 120000);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 120000;
+})();
+
 function buildStageMessages({
   stage,
   prompt,
@@ -384,16 +389,32 @@ async function invokeModel(stage: AgentStage, messages: ChatMessage[]) {
     headers.Authorization = `Bearer ${effectiveApiKey}`;
   }
 
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-      model: stage.model,
-      messages,
-      max_tokens: stage.maxTokens ?? 600,
-      temperature: stage.temperature ?? 0.4,
-    }),
-  });
+  const requestTimeoutMs = stage.requestTimeoutMs ?? DEFAULT_MODEL_TIMEOUT_MS;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), requestTimeoutMs);
+
+  let response: Response;
+
+  try {
+    response = await fetch(endpoint, {
+      method: 'POST',
+      headers,
+      signal: controller.signal,
+      body: JSON.stringify({
+        model: stage.model,
+        messages,
+        max_tokens: stage.maxTokens ?? 600,
+        temperature: stage.temperature ?? 0.4,
+      }),
+    });
+  } catch (error) {
+    if ((error as Error).name === 'AbortError') {
+      throw new Error(`Model request for ${stage.id} aborted after ${requestTimeoutMs} ms`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 
   if (!response.ok) {
     const errorText = await response.text();

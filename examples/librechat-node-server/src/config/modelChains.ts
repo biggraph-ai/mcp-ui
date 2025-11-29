@@ -24,6 +24,8 @@ export interface AgentStage {
   maxTokens?: number;
   /** Optional per-stage temperature override. */
   temperature?: number;
+  /** Optional per-stage request timeout in milliseconds. */
+  requestTimeoutMs?: number;
 }
 
 export interface ModelChain {
