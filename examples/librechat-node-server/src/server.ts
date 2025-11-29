@@ -311,6 +311,8 @@ const DEFAULT_MODEL_TIMEOUT_MS = (() => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 120000;
 })();
 
+const MODEL_DEBUG_LOGGING = String(process.env.MODEL_DEBUG_LOGGING ?? '').toLowerCase() === 'true';
+
 function buildStageMessages({
   stage,
   prompt,
@@ -395,6 +397,16 @@ async function invokeModel(stage: AgentStage, messages: ChatMessage[]) {
 
   let response: Response;
 
+  logModelDebug('model request', {
+    stageId: stage.id,
+    provider: stage.provider,
+    model: stage.model,
+    endpoint,
+    baseUrlEnv: stage.baseUrlEnv,
+    requestTimeoutMs,
+    messages,
+  });
+
   try {
     response = await fetch(endpoint, {
       method: 'POST',
@@ -431,12 +443,41 @@ async function invokeModel(stage: AgentStage, messages: ChatMessage[]) {
   const messageContent = data.choices?.[0]?.message?.content;
   const text = extractMessageText(messageContent);
 
+  logModelDebug('model response', {
+    stageId: stage.id,
+    provider: stage.provider,
+    model: stage.model,
+    endpoint,
+    responseContent: messageContent,
+    extractedText: text,
+  });
+
   if (!text) {
     const serialized = JSON.stringify(data);
     throw new Error(`Model ${stage.id} returned no content. Raw response: ${serialized}`);
   }
 
   return stripMarkdownFences(text);
+}
+
+function logModelDebug(label: string, data: Record<string, unknown>) {
+  if (!MODEL_DEBUG_LOGGING) return;
+
+  const normalized: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(data)) {
+    if (value === undefined) continue;
+
+    if (key === 'messages' && Array.isArray(value)) {
+      normalized[key] = value.map((message) => ({
+        ...(typeof message === 'object' && message !== null ? message : {}),
+      }));
+    } else {
+      normalized[key] = value;
+    }
+  }
+
+  console.debug(`[model-debug] ${label}:`, JSON.stringify(normalized, null, 2));
 }
 
 function extractMessageText(content: unknown): string {
