@@ -408,9 +408,12 @@ async function invokeModel(stage: AgentStage, messages: ChatMessage[]) {
       }),
     });
   } catch (error) {
-    if ((error as Error).name === 'AbortError') {
-      throw new Error(`Model request for ${stage.id} aborted after ${requestTimeoutMs} ms`);
+    const message = error instanceof Error ? error.message.toLowerCase() : '';
+
+    if (error instanceof Error && (error.name === 'AbortError' || message.includes('aborted') || message.includes('abort'))) {
+      throw new Error(`Model request for ${stage.id} aborted after ${requestTimeoutMs} ms (endpoint ${endpoint}).`);
     }
+
     throw error;
   } finally {
     clearTimeout(timer);
