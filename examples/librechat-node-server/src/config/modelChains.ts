@@ -79,6 +79,6 @@ export const modelChains: Record<string, ModelChain> = {
 };
 
 export function getModelChain(chainName?: string): ModelChain {
-  const selected = chainName && modelChains[chainName];
+  const selected = chainName ? modelChains[chainName] : undefined;
   return selected ?? modelChains.default;
 }
