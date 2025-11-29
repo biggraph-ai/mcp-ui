@@ -3,6 +3,20 @@ import { createUIResource } from '@mcp-ui/server';
 import { z } from 'zod';
 import { getModelChain, type AgentStage, type ModelProvider } from './config/modelChains.js';
 
+const PROVIDER_KEY_ENV: Record<ModelProvider, string> = {
+  openai: 'OPENAI_API_KEY',
+  deepseek: 'DEEPSEEK_API_KEY',
+  qwen: 'QWEN_API_KEY',
+};
+
+// Optional hardcoded keys to use when environment variables are unavailable.
+// Update these with non-production values only (for local/self-hosted proxies).
+const PROVIDER_KEY_FALLBACKS: Partial<Record<ModelProvider, string>> = {
+  // openai: 'sk-...',
+  // deepseek: 'sk-...',
+  // qwen: 'sk-...',
+};
+
 function sanitizeHtml(html: string) {
   // Remove script tags and inline event handlers to reduce risk from model output.
   return html
@@ -84,7 +98,7 @@ export function createServer() {
           .describe('Model chain identifier from src/config/modelChains.ts to use for multi-agent reasoning.'),
       },
     },
-    async ({ prompt, theme, components, chain }) => {
+    async ({ prompt, theme, components, chain }: { prompt: string; theme?: string; components?: string[]; chain?: string }) => {
       const chainConfig = getModelChain(chain);
 
       const composedPrompt = [
@@ -96,17 +110,50 @@ export function createServer() {
         .filter(Boolean)
         .join('\n');
 
-      const apiIssues = chainConfig.stages
-        .filter((stage) => !process.env[stage.apiKeyEnv])
-        .map((stage) => `${stage.label} (${stage.provider}) via ${stage.apiKeyEnv}`);
+      const missingApiStages = chainConfig.stages
+        .filter((stage) => stage.apiKeyEnv)
+        .map((stage) => ({
+          stage,
+          // Treat both the configured env var and provider default as valid, so we
+          // don't break users who keep OPENAI_API_KEY set but accidentally changed
+          // the chain to point at a literal key value.
+          envCandidates: [stage.apiKeyEnv, PROVIDER_KEY_ENV[stage.provider]].filter(Boolean) as string[],
+        }))
+        .filter(({ stage, envCandidates }) => {
+          const hardcodedKey = PROVIDER_KEY_FALLBACKS[stage.provider];
+          const hasHardcodedKey = Boolean(hardcodedKey);
 
-      if (apiIssues.length) {
-        const missingList = apiIssues.map((issue) => `<li>${issue}</li>`).join('');
+          return (
+            !hasHardcodedKey &&
+            !envCandidates.some((candidate) => /^[A-Z0-9_]+$/.test(candidate) && process.env[candidate])
+          );
+        })
+        .map(({ stage, envCandidates }) => {
+          const displayEnvVar = envCandidates.find((candidate) => /^[A-Z0-9_]+$/.test(candidate));
+          return {
+            label: stage.label,
+            provider: stage.provider,
+            envVar: displayEnvVar ?? PROVIDER_KEY_ENV[stage.provider] ?? 'API_KEY',
+          };
+        });
+
+      if (missingApiStages.length) {
+        const missingList = missingApiStages
+          .map((stage) => `<li><strong>${stage.label}</strong> (${stage.provider}) via <code>${stage.envVar}</code></li>`)
+          .join('');
+
+        const exportBlock = missingApiStages
+          .map((stage) => `${stage.envVar}=<${stage.provider}-api-key> # required for ${stage.label}`)
+          .join('\n');
+
         const fallbackHtml = `
           <section style="font-family: sans-serif; padding: 16px; border: 1px solid #e2e8f0; border-radius: 12px; max-width: 540px; margin: 0 auto;">
             <h2 style="margin-top: 0;">Model configuration missing</h2>
             <p style="color: #4b5563;">Provide API keys for each configured stage to enable chained generation:</p>
             <ul style="color: #374151; padding-left: 18px;">${missingList}</ul>
+            <p style="color: #4b5563;">Add the following to your environment or .env.local file:</p>
+            <pre style="background: #f9fafb; color: #111827; padding: 12px; border-radius: 8px; border: 1px solid #e5e7eb;">${exportBlock}</pre>
+            <p style="color: #6b7280;">Only environment variable names are shown here. If you pasted an API key directly into the chain config, move it into the matching environment variable instead.</p>
           </section>
         `;
 
@@ -259,6 +306,11 @@ const providerBaseUrls: Record<ModelProvider, string> = {
   qwen: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
 };
 
+const DEFAULT_MODEL_TIMEOUT_MS = (() => {
+  const parsed = Number(process.env.MODEL_REQUEST_TIMEOUT_MS ?? 120000);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 120000;
+})();
+
 function buildStageMessages({
   stage,
   prompt,
@@ -317,8 +369,11 @@ function stripMarkdownFences(text: string) {
 }
 
 async function invokeModel(stage: AgentStage, messages: ChatMessage[]) {
-  const apiKey = process.env[stage.apiKeyEnv];
-  if (!apiKey) {
+  const apiKey = stage.apiKeyEnv ? process.env[stage.apiKeyEnv] : undefined;
+  const hardcodedApiKey = PROVIDER_KEY_FALLBACKS[stage.provider];
+  const effectiveApiKey = apiKey || hardcodedApiKey;
+
+  if (stage.apiKeyEnv && !effectiveApiKey) {
     throw new Error(`Missing API key for ${stage.id} (${stage.apiKeyEnv})`);
   }
 
@@ -326,19 +381,40 @@ async function invokeModel(stage: AgentStage, messages: ChatMessage[]) {
   const endpointBase = customBaseUrl || providerBaseUrls[stage.provider];
   const endpoint = `${endpointBase}/chat/completions`;
 
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: stage.model,
-      messages,
-      max_tokens: stage.maxTokens ?? 600,
-      temperature: stage.temperature ?? 0.4,
-    }),
-  });
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+
+  if (effectiveApiKey) {
+    headers.Authorization = `Bearer ${effectiveApiKey}`;
+  }
+
+  const requestTimeoutMs = stage.requestTimeoutMs ?? DEFAULT_MODEL_TIMEOUT_MS;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), requestTimeoutMs);
+
+  let response: Response;
+
+  try {
+    response = await fetch(endpoint, {
+      method: 'POST',
+      headers,
+      signal: controller.signal,
+      body: JSON.stringify({
+        model: stage.model,
+        messages,
+        max_tokens: stage.maxTokens ?? 600,
+        temperature: stage.temperature ?? 0.4,
+      }),
+    });
+  } catch (error) {
+    if ((error as Error).name === 'AbortError') {
+      throw new Error(`Model request for ${stage.id} aborted after ${requestTimeoutMs} ms`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 
   if (!response.ok) {
     const errorText = await response.text();
@@ -346,13 +422,52 @@ async function invokeModel(stage: AgentStage, messages: ChatMessage[]) {
   }
 
   const data = (await response.json()) as {
-    choices?: { message?: { content?: string } }[];
+    choices?: { message?: { content?: unknown } }[];
   };
 
-  const text = data.choices?.[0]?.message?.content;
+  const messageContent = data.choices?.[0]?.message?.content;
+  const text = extractMessageText(messageContent);
+
   if (!text) {
-    throw new Error(`Model ${stage.id} returned no content`);
+    const serialized = JSON.stringify(data);
+    throw new Error(`Model ${stage.id} returned no content. Raw response: ${serialized}`);
   }
 
   return stripMarkdownFences(text);
+}
+
+function extractMessageText(content: unknown): string {
+  if (!content) return '';
+
+  if (typeof content === 'string') {
+    return content;
+  }
+
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part === 'string') return part;
+
+        // Handle OpenAI-style content blocks: { type: 'text', text: { value: '...' } }
+        if (typeof part === 'object' && part !== null) {
+          const maybeText = (part as { text?: unknown }).text;
+
+          if (typeof maybeText === 'string') return maybeText;
+          if (maybeText && typeof maybeText === 'object' && 'value' in maybeText && typeof maybeText.value === 'string') {
+            return maybeText.value;
+          }
+
+          // Some providers nest the actual string under `content`.
+          if ('content' in part && typeof (part as { content?: unknown }).content === 'string') {
+            return (part as { content: string }).content;
+          }
+        }
+
+        return '';
+      })
+      .join('')
+      .trim();
+  }
+
+  return '';
 }

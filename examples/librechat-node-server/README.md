@@ -58,6 +58,7 @@ These tools can be expanded or adapted to fit your own capabilities; they alread
   - `OPENAI_API_KEY`
   - `DEEPSEEK_API_KEY` (optional `DEEPSEEK_BASE_URL` override)
   - `QWEN_API_KEY` (optional `QWEN_BASE_URL` override)
+- Requests default to a 120s timeout. Increase globally via `MODEL_REQUEST_TIMEOUT_MS`, or set a per-stage `requestTimeoutMs` in `modelChains.ts` when a model needs longer to respond.
 - To pick a different chain from LibreChat, pass the `chain` field when calling `generateUiHtml`.
 
 ### Example prompt for UI generation
