@@ -1,5 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { createUIResource } from '@mcp-ui/server';
+import { z } from 'zod';
 import { getModelChain, type AgentStage, type ModelProvider } from './config/modelChains.js';
 
 function sanitizeHtml(html: string) {
@@ -71,29 +72,16 @@ export function createServer() {
       title: 'Generate UI HTML',
       description: 'Use an AI model to generate sanitized HTML UI snippets for LibreChat.',
       inputSchema: {
-        type: 'object',
-        properties: {
-          prompt: {
-            type: 'string',
-            description: 'Primary design prompt or user instructions for the UI.',
-          },
-          theme: {
-            type: 'string',
-            description: 'Optional theme or visual style to apply to the HTML output.',
-          },
-          components: {
-            type: 'array',
-            description: 'Optional list of components to prioritize (buttons, inputs, cards, etc.).',
-            items: { type: 'string' },
-          },
-          chain: {
-            type: 'string',
-            description:
-              'Model chain identifier from src/config/modelChains.ts to use for multi-agent reasoning.',
-          },
-        },
-        required: ['prompt'],
-        additionalProperties: false,
+        prompt: z.string().describe('Primary design prompt or user instructions for the UI.'),
+        theme: z.string().optional().describe('Optional theme or visual style to apply to the HTML output.'),
+        components: z
+          .array(z.string())
+          .optional()
+          .describe('Optional list of components to prioritize (buttons, inputs, cards, etc.).'),
+        chain: z
+          .string()
+          .optional()
+          .describe('Model chain identifier from src/config/modelChains.ts to use for multi-agent reasoning.'),
       },
     },
     async ({ prompt, theme, components, chain }) => {
