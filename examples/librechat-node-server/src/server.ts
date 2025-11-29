@@ -84,7 +84,7 @@ export function createServer() {
           .describe('Model chain identifier from src/config/modelChains.ts to use for multi-agent reasoning.'),
       },
     },
-    async ({ prompt, theme, components, chain }) => {
+    async ({ prompt, theme, components, chain }: { prompt: string; theme?: string; components?: string[]; chain?: string }) => {
       const chainConfig = getModelChain(chain);
 
       const composedPrompt = [
@@ -97,7 +97,7 @@ export function createServer() {
         .join('\n');
 
       const apiIssues = chainConfig.stages
-        .filter((stage) => !process.env[stage.apiKeyEnv])
+        .filter((stage) => stage.apiKeyEnv && !process.env[stage.apiKeyEnv])
         .map((stage) => `${stage.label} (${stage.provider}) via ${stage.apiKeyEnv}`);
 
       if (apiIssues.length) {
@@ -317,8 +317,8 @@ function stripMarkdownFences(text: string) {
 }
 
 async function invokeModel(stage: AgentStage, messages: ChatMessage[]) {
-  const apiKey = process.env[stage.apiKeyEnv];
-  if (!apiKey) {
+  const apiKey = stage.apiKeyEnv ? process.env[stage.apiKeyEnv] : undefined;
+  if (stage.apiKeyEnv && !apiKey) {
     throw new Error(`Missing API key for ${stage.id} (${stage.apiKeyEnv})`);
   }
 
@@ -326,12 +326,17 @@ async function invokeModel(stage: AgentStage, messages: ChatMessage[]) {
   const endpointBase = customBaseUrl || providerBaseUrls[stage.provider];
   const endpoint = `${endpointBase}/chat/completions`;
 
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+
+  if (apiKey) {
+    headers.Authorization = `Bearer ${apiKey}`;
+  }
+
   const response = await fetch(endpoint, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
+    headers,
     body: JSON.stringify({
       model: stage.model,
       messages,
