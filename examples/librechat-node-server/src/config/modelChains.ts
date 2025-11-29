@@ -83,7 +83,24 @@ export const modelChains: Record<string, ModelChain> = {
   },
 };
 
+function shouldDisableReviewer() {
+  const raw = process.env.DISABLE_REVIEWER_STAGE;
+  if (!raw) return false;
+
+  const normalized = raw.trim().toLowerCase();
+  return ['1', 'true', 'yes', 'on'].includes(normalized);
+}
+
 export function getModelChain(chainName?: string): ModelChain {
   const selected = chainName ? modelChains[chainName] : undefined;
-  return selected ?? modelChains.default;
+  const chain = selected ?? modelChains.default;
+
+  if (!shouldDisableReviewer()) {
+    return chain;
+  }
+
+  return {
+    ...chain,
+    stages: chain.stages.filter((stage) => stage.role !== 'reviewer'),
+  };
 }
