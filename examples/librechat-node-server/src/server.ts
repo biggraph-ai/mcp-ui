@@ -1,5 +1,16 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { createUIResource } from '@mcp-ui/server';
+import { getModelChain, type AgentStage, type ModelProvider } from './config/modelChains.js';
+
+function sanitizeHtml(html: string) {
+  // Remove script tags and inline event handlers to reduce risk from model output.
+  return html
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+    .replace(/on\w+\s*=\s*"[^"]*"/gi, '')
+    .replace(/on\w+\s*=\s*'[^']*'/gi, '')
+    .replace(/on\w+\s*=\s*[^\s>]+/gi, '')
+    .trim();
+}
 
 export function createServer() {
   const server = new McpServer({
@@ -51,6 +62,132 @@ export function createServer() {
       });
 
       return { content: [uiResource] };
+    },
+  );
+
+  server.registerTool(
+    'generateUiHtml',
+    {
+      title: 'Generate UI HTML',
+      description: 'Use an AI model to generate sanitized HTML UI snippets for LibreChat.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          prompt: {
+            type: 'string',
+            description: 'Primary design prompt or user instructions for the UI.',
+          },
+          theme: {
+            type: 'string',
+            description: 'Optional theme or visual style to apply to the HTML output.',
+          },
+          components: {
+            type: 'array',
+            description: 'Optional list of components to prioritize (buttons, inputs, cards, etc.).',
+            items: { type: 'string' },
+          },
+          chain: {
+            type: 'string',
+            description:
+              'Model chain identifier from src/config/modelChains.ts to use for multi-agent reasoning.',
+          },
+        },
+        required: ['prompt'],
+        additionalProperties: false,
+      },
+    },
+    async ({ prompt, theme, components, chain }) => {
+      const chainConfig = getModelChain(chain);
+
+      const composedPrompt = [
+        prompt,
+        theme ? `Theme preference: ${theme}.` : '',
+        components?.length ? `Highlight components: ${components.join(', ')}.` : '',
+        'Prioritize semantic, accessible HTML with inline styles only.',
+      ]
+        .filter(Boolean)
+        .join('\n');
+
+      const apiIssues = chainConfig.stages
+        .filter((stage) => !process.env[stage.apiKeyEnv])
+        .map((stage) => `${stage.label} (${stage.provider}) via ${stage.apiKeyEnv}`);
+
+      if (apiIssues.length) {
+        const missingList = apiIssues.map((issue) => `<li>${issue}</li>`).join('');
+        const fallbackHtml = `
+          <section style="font-family: sans-serif; padding: 16px; border: 1px solid #e2e8f0; border-radius: 12px; max-width: 540px; margin: 0 auto;">
+            <h2 style="margin-top: 0;">Model configuration missing</h2>
+            <p style="color: #4b5563;">Provide API keys for each configured stage to enable chained generation:</p>
+            <ul style="color: #374151; padding-left: 18px;">${missingList}</ul>
+          </section>
+        `;
+
+        return {
+          content: [
+            createUIResource({
+              uri: 'ui://generate-ui-html/error',
+              content: { type: 'rawHtml', htmlString: fallbackHtml.trim() },
+              encoding: 'text',
+            }),
+          ],
+        };
+      }
+
+      let plan = '';
+      let review = '';
+      let finalHtml = '';
+
+      try {
+        for (const stage of chainConfig.stages) {
+          const messages = buildStageMessages({
+            stage,
+            prompt: composedPrompt,
+            plan,
+            review,
+          });
+
+          const responseText = await invokeModel(stage, messages);
+
+          if (stage.role === 'planner') {
+            plan = responseText;
+          } else if (stage.role === 'reviewer') {
+            review = responseText;
+          } else {
+            finalHtml = sanitizeHtml(responseText);
+          }
+        }
+
+        if (!finalHtml) {
+          throw new Error('Model chain completed without HTML output');
+        }
+
+        const uiResource = createUIResource({
+          uri: 'ui://generate-ui-html/result',
+          content: { type: 'rawHtml', htmlString: finalHtml },
+          encoding: 'text',
+        });
+
+        return { content: [uiResource] };
+      } catch (error) {
+        console.error('generateUiHtml chain error:', error);
+
+        const friendlyHtml = `
+          <section style="font-family: sans-serif; padding: 16px; border: 1px solid #fecdd3; background: #fff1f2; border-radius: 12px; max-width: 520px; margin: 0 auto; color: #9f1239;">
+            <h3 style="margin-top: 0;">We couldn\'t generate your UI</h3>
+            <p style="color: #b91c1c;">Please try again or adjust your prompt. If the issue persists, check model credentials and network access.</p>
+          </section>
+        `;
+
+        return {
+          content: [
+            createUIResource({
+              uri: 'ui://generate-ui-html/error',
+              content: { type: 'rawHtml', htmlString: friendlyHtml.trim() },
+              encoding: 'text',
+            }),
+          ],
+        };
+      }
     },
   );
 
@@ -124,4 +261,110 @@ export function createServer() {
   );
 
   return server;
+}
+
+type ChatMessage = { role: 'system' | 'user' | 'assistant'; content: string };
+
+const providerBaseUrls: Record<ModelProvider, string> = {
+  openai: 'https://api.openai.com/v1',
+  deepseek: 'https://api.deepseek.com/v1',
+  qwen: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+};
+
+function buildStageMessages({
+  stage,
+  prompt,
+  plan,
+  review,
+}: {
+  stage: AgentStage;
+  prompt: string;
+  plan: string;
+  review: string;
+}): ChatMessage[] {
+  if (stage.role === 'planner') {
+    return [
+      {
+        role: 'system',
+        content:
+          'You are a UI layout planner. Summarize the requested interface, list key sections, and outline an accessible structure.',
+      },
+      { role: 'user', content: prompt },
+    ];
+  }
+
+  if (stage.role === 'reviewer') {
+    return [
+      {
+        role: 'system',
+        content:
+          'You are an accessibility and UX reviewer. Provide concise improvements and guardrails for the UI plan.',
+      },
+      { role: 'user', content: `Original prompt:\n${prompt}\n\nCurrent plan:\n${plan || 'No plan yet.'}` },
+    ];
+  }
+
+  return [
+    {
+      role: 'system',
+      content:
+        'You are a front-end coder. Generate final HTML only (no Markdown fences), with inline styles and ARIA-friendly markup.',
+    },
+    {
+      role: 'user',
+      content: [
+        `Prompt:\n${prompt}`,
+        plan ? `Planned structure:\n${plan}` : '',
+        review ? `Review notes:\n${review}` : '',
+        'Return a compact, production-ready snippet. Avoid external assets and scripts.',
+      ]
+        .filter(Boolean)
+        .join('\n\n'),
+    },
+  ];
+}
+
+function stripMarkdownFences(text: string) {
+  return text.replace(/```[a-z]*\n?/gi, '').replace(/```/g, '').trim();
+}
+
+async function invokeModel(stage: AgentStage, messages: ChatMessage[]) {
+  const apiKey = process.env[stage.apiKeyEnv];
+  if (!apiKey) {
+    throw new Error(`Missing API key for ${stage.id} (${stage.apiKeyEnv})`);
+  }
+
+  const customBaseUrl = stage.baseUrlEnv ? process.env[stage.baseUrlEnv] : undefined;
+  const endpointBase = customBaseUrl || providerBaseUrls[stage.provider];
+  const endpoint = `${endpointBase}/chat/completions`;
+
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: stage.model,
+      messages,
+      max_tokens: stage.maxTokens ?? 600,
+      temperature: stage.temperature ?? 0.4,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Model request failed for ${stage.id}: ${response.status} ${errorText}`);
+  }
+
+  const data = (await response.json()) as {
+    choices?: { message?: { content?: string } }[];
+  };
+
+  const text = data.choices?.[0]?.message?.content;
+  if (!text) {
+    throw new Error(`Model ${stage.id} returned no content`);
+  }
+
+  return stripMarkdownFences(text);
 }
