@@ -401,13 +401,52 @@ async function invokeModel(stage: AgentStage, messages: ChatMessage[]) {
   }
 
   const data = (await response.json()) as {
-    choices?: { message?: { content?: string } }[];
+    choices?: { message?: { content?: unknown } }[];
   };
 
-  const text = data.choices?.[0]?.message?.content;
+  const messageContent = data.choices?.[0]?.message?.content;
+  const text = extractMessageText(messageContent);
+
   if (!text) {
-    throw new Error(`Model ${stage.id} returned no content`);
+    const serialized = JSON.stringify(data);
+    throw new Error(`Model ${stage.id} returned no content. Raw response: ${serialized}`);
   }
 
   return stripMarkdownFences(text);
+}
+
+function extractMessageText(content: unknown): string {
+  if (!content) return '';
+
+  if (typeof content === 'string') {
+    return content;
+  }
+
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part === 'string') return part;
+
+        // Handle OpenAI-style content blocks: { type: 'text', text: { value: '...' } }
+        if (typeof part === 'object' && part !== null) {
+          const maybeText = (part as { text?: unknown }).text;
+
+          if (typeof maybeText === 'string') return maybeText;
+          if (maybeText && typeof maybeText === 'object' && 'value' in maybeText && typeof maybeText.value === 'string') {
+            return maybeText.value;
+          }
+
+          // Some providers nest the actual string under `content`.
+          if ('content' in part && typeof (part as { content?: unknown }).content === 'string') {
+            return (part as { content: string }).content;
+          }
+        }
+
+        return '';
+      })
+      .join('')
+      .trim();
+  }
+
+  return '';
 }
