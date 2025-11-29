@@ -3,6 +3,12 @@ import { createUIResource } from '@mcp-ui/server';
 import { z } from 'zod';
 import { getModelChain, type AgentStage, type ModelProvider } from './config/modelChains.js';
 
+const PROVIDER_KEY_ENV: Record<ModelProvider, string> = {
+  openai: 'OPENAI_API_KEY',
+  deepseek: 'DEEPSEEK_API_KEY',
+  qwen: 'QWEN_API_KEY',
+};
+
 function sanitizeHtml(html: string) {
   // Remove script tags and inline event handlers to reduce risk from model output.
   return html
@@ -97,12 +103,25 @@ export function createServer() {
         .join('\n');
 
       const missingApiStages = chainConfig.stages
-        .filter((stage) => stage.apiKeyEnv && !process.env[stage.apiKeyEnv])
+        .filter((stage) => stage.apiKeyEnv)
         .map((stage) => ({
-          label: stage.label,
-          provider: stage.provider,
-          envVar: stage.apiKeyEnv as string,
-        }));
+          stage,
+          // Treat both the configured env var and provider default as valid, so we
+          // don't break users who keep OPENAI_API_KEY set but accidentally changed
+          // the chain to point at a literal key value.
+          envCandidates: [stage.apiKeyEnv, PROVIDER_KEY_ENV[stage.provider]].filter(Boolean) as string[],
+        }))
+        .filter(({ envCandidates }) => {
+          return !envCandidates.some((candidate) => /^[A-Z0-9_]+$/.test(candidate) && process.env[candidate]);
+        })
+        .map(({ stage, envCandidates }) => {
+          const displayEnvVar = envCandidates.find((candidate) => /^[A-Z0-9_]+$/.test(candidate));
+          return {
+            label: stage.label,
+            provider: stage.provider,
+            envVar: displayEnvVar ?? PROVIDER_KEY_ENV[stage.provider] ?? 'API_KEY',
+          };
+        });
 
       if (missingApiStages.length) {
         const missingList = missingApiStages
@@ -120,6 +139,7 @@ export function createServer() {
             <ul style="color: #374151; padding-left: 18px;">${missingList}</ul>
             <p style="color: #4b5563;">Add the following to your environment or .env.local file:</p>
             <pre style="background: #f9fafb; color: #111827; padding: 12px; border-radius: 8px; border: 1px solid #e5e7eb;">${exportBlock}</pre>
+            <p style="color: #6b7280;">Only environment variable names are shown here. If you pasted an API key directly into the chain config, move it into the matching environment variable instead.</p>
           </section>
         `;
 
