@@ -9,6 +9,14 @@ const PROVIDER_KEY_ENV: Record<ModelProvider, string> = {
   qwen: 'QWEN_API_KEY',
 };
 
+// Optional hardcoded keys to use when environment variables are unavailable.
+// Update these with non-production values only (for local/self-hosted proxies).
+const PROVIDER_KEY_FALLBACKS: Partial<Record<ModelProvider, string>> = {
+  // openai: 'sk-...',
+  // deepseek: 'sk-...',
+  // qwen: 'sk-...',
+};
+
 function sanitizeHtml(html: string) {
   // Remove script tags and inline event handlers to reduce risk from model output.
   return html
@@ -111,8 +119,14 @@ export function createServer() {
           // the chain to point at a literal key value.
           envCandidates: [stage.apiKeyEnv, PROVIDER_KEY_ENV[stage.provider]].filter(Boolean) as string[],
         }))
-        .filter(({ envCandidates }) => {
-          return !envCandidates.some((candidate) => /^[A-Z0-9_]+$/.test(candidate) && process.env[candidate]);
+        .filter(({ stage, envCandidates }) => {
+          const hardcodedKey = PROVIDER_KEY_FALLBACKS[stage.provider];
+          const hasHardcodedKey = Boolean(hardcodedKey);
+
+          return (
+            !hasHardcodedKey &&
+            !envCandidates.some((candidate) => /^[A-Z0-9_]+$/.test(candidate) && process.env[candidate])
+          );
         })
         .map(({ stage, envCandidates }) => {
           const displayEnvVar = envCandidates.find((candidate) => /^[A-Z0-9_]+$/.test(candidate));
@@ -351,7 +365,10 @@ function stripMarkdownFences(text: string) {
 
 async function invokeModel(stage: AgentStage, messages: ChatMessage[]) {
   const apiKey = stage.apiKeyEnv ? process.env[stage.apiKeyEnv] : undefined;
-  if (stage.apiKeyEnv && !apiKey) {
+  const hardcodedApiKey = PROVIDER_KEY_FALLBACKS[stage.provider];
+  const effectiveApiKey = apiKey || hardcodedApiKey;
+
+  if (stage.apiKeyEnv && !effectiveApiKey) {
     throw new Error(`Missing API key for ${stage.id} (${stage.apiKeyEnv})`);
   }
 
@@ -363,8 +380,8 @@ async function invokeModel(stage: AgentStage, messages: ChatMessage[]) {
     'Content-Type': 'application/json',
   };
 
-  if (apiKey) {
-    headers.Authorization = `Bearer ${apiKey}`;
+  if (effectiveApiKey) {
+    headers.Authorization = `Bearer ${effectiveApiKey}`;
   }
 
   const response = await fetch(endpoint, {
