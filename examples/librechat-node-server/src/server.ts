@@ -84,7 +84,7 @@ export function createServer() {
           .describe('Model chain identifier from src/config/modelChains.ts to use for multi-agent reasoning.'),
       },
     },
-    async ({ prompt, theme, components, chain }) => {
+    async ({ prompt, theme, components, chain }: { prompt: string; theme?: string; components?: string[]; chain?: string }) => {
       const chainConfig = getModelChain(chain);
 
       const composedPrompt = [
@@ -96,17 +96,30 @@ export function createServer() {
         .filter(Boolean)
         .join('\n');
 
-      const apiIssues = chainConfig.stages
-        .filter((stage) => !process.env[stage.apiKeyEnv])
-        .map((stage) => `${stage.label} (${stage.provider}) via ${stage.apiKeyEnv}`);
+      const missingApiStages = chainConfig.stages
+        .filter((stage) => stage.apiKeyEnv && !process.env[stage.apiKeyEnv])
+        .map((stage) => ({
+          label: stage.label,
+          provider: stage.provider,
+          envVar: stage.apiKeyEnv as string,
+        }));
 
-      if (apiIssues.length) {
-        const missingList = apiIssues.map((issue) => `<li>${issue}</li>`).join('');
+      if (missingApiStages.length) {
+        const missingList = missingApiStages
+          .map((stage) => `<li><strong>${stage.label}</strong> (${stage.provider}) via <code>${stage.envVar}</code></li>`)
+          .join('');
+
+        const exportBlock = missingApiStages
+          .map((stage) => `${stage.envVar}=<${stage.provider}-api-key> # required for ${stage.label}`)
+          .join('\n');
+
         const fallbackHtml = `
           <section style="font-family: sans-serif; padding: 16px; border: 1px solid #e2e8f0; border-radius: 12px; max-width: 540px; margin: 0 auto;">
             <h2 style="margin-top: 0;">Model configuration missing</h2>
             <p style="color: #4b5563;">Provide API keys for each configured stage to enable chained generation:</p>
             <ul style="color: #374151; padding-left: 18px;">${missingList}</ul>
+            <p style="color: #4b5563;">Add the following to your environment or .env.local file:</p>
+            <pre style="background: #f9fafb; color: #111827; padding: 12px; border-radius: 8px; border: 1px solid #e5e7eb;">${exportBlock}</pre>
           </section>
         `;
 
@@ -317,8 +330,8 @@ function stripMarkdownFences(text: string) {
 }
 
 async function invokeModel(stage: AgentStage, messages: ChatMessage[]) {
-  const apiKey = process.env[stage.apiKeyEnv];
-  if (!apiKey) {
+  const apiKey = stage.apiKeyEnv ? process.env[stage.apiKeyEnv] : undefined;
+  if (stage.apiKeyEnv && !apiKey) {
     throw new Error(`Missing API key for ${stage.id} (${stage.apiKeyEnv})`);
   }
 
@@ -326,12 +339,17 @@ async function invokeModel(stage: AgentStage, messages: ChatMessage[]) {
   const endpointBase = customBaseUrl || providerBaseUrls[stage.provider];
   const endpoint = `${endpointBase}/chat/completions`;
 
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+
+  if (apiKey) {
+    headers.Authorization = `Bearer ${apiKey}`;
+  }
+
   const response = await fetch(endpoint, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
+    headers,
     body: JSON.stringify({
       model: stage.model,
       messages,
