@@ -11,8 +11,11 @@ export interface AgentStage {
   provider: ModelProvider;
   /** Model name to request from the provider (supports coding-specialized models). */
   model: string;
-  /** Environment variable that contains the API key for this provider. */
-  apiKeyEnv: string;
+  /**
+   * Environment variable that contains the API key for this provider.
+   * Local/self-hosted models can omit this to perform keyless requests.
+   */
+  apiKeyEnv?: string;
   /** Optional environment variable that overrides the provider base URL. */
   baseUrlEnv?: string;
   /** Stage intent determines how the server builds prompts across the chain. */
