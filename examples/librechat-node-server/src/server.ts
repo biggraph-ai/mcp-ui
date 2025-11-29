@@ -12,7 +12,7 @@ const PROVIDER_KEY_ENV: Record<ModelProvider, string> = {
 // Optional hardcoded keys to use when environment variables are unavailable.
 // Update these with non-production values only (for local/self-hosted proxies).
 const PROVIDER_KEY_FALLBACKS: Partial<Record<ModelProvider, string>> = {
-  // openai: 'sk-...',
+   openai: 'sk-',
   // deepseek: 'sk-...',
   // qwen: 'sk-...',
 };
@@ -302,8 +302,8 @@ type ChatMessage = { role: 'system' | 'user' | 'assistant'; content: string };
 
 const providerBaseUrls: Record<ModelProvider, string> = {
   openai: 'https://api.openai.com/v1',
-  deepseek: 'https://api.deepseek.com/v1',
-  qwen: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+  deepseek: 'http://192.222.51.44:11434/v1',
+  qwen: 'http://192.222.51.44:11434/v1',
 };
 
 const DEFAULT_MODEL_TIMEOUT_MS = (() => {
@@ -408,9 +408,12 @@ async function invokeModel(stage: AgentStage, messages: ChatMessage[]) {
       }),
     });
   } catch (error) {
-    if ((error as Error).name === 'AbortError') {
-      throw new Error(`Model request for ${stage.id} aborted after ${requestTimeoutMs} ms`);
+    const message = error instanceof Error ? error.message.toLowerCase() : '';
+
+    if (error instanceof Error && (error.name === 'AbortError' || message.includes('aborted') || message.includes('abort'))) {
+      throw new Error(`Model request for ${stage.id} aborted after ${requestTimeoutMs} ms (endpoint ${endpoint}).`);
     }
+
     throw error;
   } finally {
     clearTimeout(timer);
