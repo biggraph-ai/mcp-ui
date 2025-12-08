@@ -48,11 +48,18 @@ const transports: { [sessionId: string]: StreamableHTTPServerTransport } = {};
 app.post('/mcp', async (req, res) => {
   const sessionId = req.headers['mcp-session-id'] as string | undefined;
   let transport: StreamableHTTPServerTransport;
+  const requestIsInitialize = isInitializeRequest(req.body);
 
   if (sessionId && transports[sessionId]) {
     // A session already exists; reuse the existing transport.
+    if (requestIsInitialize) {
+      return res.status(400).json({
+        error: { message: 'Bad Request: Session already initialized. Reuse the existing session or omit MCP-Session-Id to start a new one.' },
+      });
+    }
+
     transport = transports[sessionId];
-  } else if (!sessionId && isInitializeRequest(req.body)) {
+  } else if (requestIsInitialize) {
     // This is a new initialization request. Create a new transport.
     transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
