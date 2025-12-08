@@ -5,6 +5,8 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { createUIResource } from '@mcp-ui/server';
 import { randomUUID } from 'crypto';
+import { promises as fs } from 'fs';
+import path from 'path';
 import { z } from 'zod';
 
 const app = express();
@@ -12,6 +14,7 @@ const port = 3000;
 
 // Base URL for the model endpoint (defaults to Ollama's OpenAI-compatible API).
 const MODEL_ENDPOINT = 'http://192.222.51.44:11434/v1';
+const LOG_BASE_DIR = path.resolve(process.cwd(), 'html-logs');
 
 type ChatCompletionResponse = {
   choices?: Array<{
@@ -65,6 +68,30 @@ async function transformHtmlWithModel(html: string, prompt: string): Promise<str
     throw error;
   } finally {
     clearTimeout(timeout);
+  }
+}
+
+async function logHtmlSnapshot({
+  html,
+  prompt,
+  transformedHtml,
+}: {
+  html: string;
+  prompt: string;
+  transformedHtml: string;
+}): Promise<void> {
+  const snapshotDir = path.join(LOG_BASE_DIR, `html-log-${randomUUID()}`);
+
+  try {
+    await fs.mkdir(snapshotDir, { recursive: true });
+
+    await Promise.all([
+      fs.writeFile(path.join(snapshotDir, 'prompt.txt'), prompt, 'utf8'),
+      fs.writeFile(path.join(snapshotDir, 'input.html'), html, 'utf8'),
+      fs.writeFile(path.join(snapshotDir, 'output.html'), transformedHtml, 'utf8'),
+    ]);
+  } catch (error) {
+    console.error('Failed to log HTML snapshot:', error);
   }
 }
 
@@ -138,6 +165,8 @@ app.post('/mcp', async (req, res) => {
       inputSchema: transformHtmlInputSchema,
     }, async ({ html, prompt }: TransformHtmlInput) => {
       const transformedHtml = await transformHtmlWithModel(html, prompt);
+
+      await logHtmlSnapshot({ html, prompt, transformedHtml });
 
       const uiResource = createUIResource({
         uri: 'ui://transformed',
