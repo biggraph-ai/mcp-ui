@@ -10,27 +10,25 @@ import { z } from 'zod';
 const app = express();
 const port = 3000;
 
-// Placeholder model endpoint for HTML transformation.
-// Replace this with your actual model provider URL or client initialization.
-const MODEL_ENDPOINT = process.env.MODEL_ENDPOINT;
+// Model endpoint for HTML transformation.
+const MODEL_ENDPOINT = 'http://192.222.51.44:11434/v1';
+
+type ModelResponse = {
+  html?: string;
+};
 
 async function transformHtmlWithModel(html: string, prompt: string): Promise<string> {
-  if (!MODEL_ENDPOINT) {
-    console.warn('MODEL_ENDPOINT is not configured. Returning the original HTML.');
-    return html;
-  }
-
   const response = await fetch(MODEL_ENDPOINT, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ html, prompt }),
+    body: JSON.stringify({ model: 'qwen3:30b', html, prompt }),
   });
 
   if (!response.ok) {
     throw new Error(`Model request failed with status ${response.status}`);
   }
 
-  const data = await response.json();
+  const data = (await response.json()) as ModelResponse;
   return data.html ?? html;
 }
 
