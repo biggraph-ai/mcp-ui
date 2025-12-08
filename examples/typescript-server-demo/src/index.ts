@@ -23,33 +23,49 @@ type ChatCompletionResponse = {
 
 async function transformHtmlWithModel(html: string, prompt: string): Promise<string> {
   const completionUrl = new URL('chat/completions', `${MODEL_ENDPOINT.replace(/\/$/, '')}/`).toString();
+  // Abort the model call if it takes too long to avoid 30s tool timeouts downstream.
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 25000);
 
-  const response = await fetch(completionUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: 'qwen3:30b',
-      stream: false,
-      messages: [
-        {
-          role: 'system',
-          content: 'Transform the provided HTML according to the user prompt. Return only the resulting HTML.',
-        },
-        {
-          role: 'user',
-          content: `Prompt: ${prompt}\nHTML:\n${html}`,
-        },
-      ],
-    }),
-  });
+  try {
+    const response = await fetch(completionUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'qwen3:30b',
+        stream: false,
+        messages: [
+          {
+            role: 'system',
+            content: 'Transform the provided HTML according to the user prompt. Return only the resulting HTML.',
+          },
+          {
+            role: 'user',
+            content: `Prompt: ${prompt}\nHTML:\n${html}`,
+          },
+        ],
+      }),
+      signal: controller.signal,
+    });
 
-  if (!response.ok) {
-    throw new Error(`Model request failed with status ${response.status}`);
+    if (!response.ok) {
+      throw new Error(`Model request failed with status ${response.status}`);
+    }
+
+    const data = (await response.json()) as ChatCompletionResponse;
+    const modelHtml = data.choices?.[0]?.message?.content;
+    return modelHtml?.trim() ?? html;
+  } catch (error) {
+    if ((error as Error).name === 'AbortError') {
+      console.warn('Model request timed out after 25s; returning original HTML.');
+      return html;
+    }
+
+    console.error('Model request failed:', error);
+    throw error;
+  } finally {
+    clearTimeout(timeout);
   }
-
-  const data = (await response.json()) as ChatCompletionResponse;
-  const modelHtml = data.choices?.[0]?.message?.content;
-  return modelHtml?.trim() ?? html;
 }
 
 app.use(cors({
