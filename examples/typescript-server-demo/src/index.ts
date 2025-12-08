@@ -81,12 +81,14 @@ app.post('/mcp', async (req, res) => {
       prompt: z.string().describe('Instructions describing how to transform the HTML.'),
     } satisfies z.ZodRawShape;
 
+    type TransformHtmlInput = z.infer<z.ZodObject<typeof transformHtmlInputSchema>>;
+
     // Register a single tool for transforming HTML with a model provider.
     server.registerTool('transformHtml', {
       title: 'Transform HTML',
       description: 'Transforms HTML based on a prompt using a model provider.',
       inputSchema: transformHtmlInputSchema,
-    }, async ({ html, prompt }) => {
+    }, async ({ html, prompt }: TransformHtmlInput) => {
       const transformedHtml = await transformHtmlWithModel(html, prompt);
 
       const uiResource = createUIResource({
