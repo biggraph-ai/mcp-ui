@@ -10,26 +10,46 @@ import { z } from 'zod';
 const app = express();
 const port = 3000;
 
-// Model endpoint for HTML transformation.
+// Base URL for the model endpoint (defaults to Ollama's OpenAI-compatible API).
 const MODEL_ENDPOINT = 'http://192.222.51.44:11434/v1';
 
-type ModelResponse = {
-  html?: string;
+type ChatCompletionResponse = {
+  choices?: Array<{
+    message?: {
+      content?: string;
+    };
+  }>;
 };
 
 async function transformHtmlWithModel(html: string, prompt: string): Promise<string> {
-  const response = await fetch(MODEL_ENDPOINT, {
+  const completionUrl = new URL('chat/completions', `${MODEL_ENDPOINT.replace(/\/$/, '')}/`).toString();
+
+  const response = await fetch(completionUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: 'qwen3:30b', html, prompt }),
+    body: JSON.stringify({
+      model: 'qwen3:30b',
+      stream: false,
+      messages: [
+        {
+          role: 'system',
+          content: 'Transform the provided HTML according to the user prompt. Return only the resulting HTML.',
+        },
+        {
+          role: 'user',
+          content: `Prompt: ${prompt}\nHTML:\n${html}`,
+        },
+      ],
+    }),
   });
 
   if (!response.ok) {
     throw new Error(`Model request failed with status ${response.status}`);
   }
 
-  const data = (await response.json()) as ModelResponse;
-  return data.html ?? html;
+  const data = (await response.json()) as ChatCompletionResponse;
+  const modelHtml = data.choices?.[0]?.message?.content;
+  return modelHtml?.trim() ?? html;
 }
 
 app.use(cors({
