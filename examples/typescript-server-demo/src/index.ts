@@ -5,6 +5,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { createUIResource } from '@mcp-ui/server';
 import { randomUUID } from 'crypto';
+import { z } from 'zod';
 
 const app = express();
 const port = 3000;
@@ -80,12 +81,8 @@ app.post('/mcp', async (req, res) => {
       title: 'Transform HTML',
       description: 'Transforms HTML based on a prompt using a model provider.',
       inputSchema: {
-        type: 'object',
-        properties: {
-          html: { type: 'string', description: 'The source HTML to transform.' },
-          prompt: { type: 'string', description: 'Instructions describing how to transform the HTML.' },
-        },
-        required: ['html', 'prompt'],
+        html: z.string().describe('The source HTML to transform.'),
+        prompt: z.string().describe('Instructions describing how to transform the HTML.'),
       },
     }, async ({ html, prompt }: { html: string; prompt: string }) => {
       const transformedHtml = await transformHtmlWithModel(html, prompt);
