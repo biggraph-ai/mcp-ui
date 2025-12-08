@@ -53,8 +53,15 @@ app.post('/mcp', async (req, res) => {
   if (sessionId && transports[sessionId]) {
     // A session already exists; reuse the existing transport.
     if (requestIsInitialize) {
-      return res.status(400).json({
-        error: { message: 'Bad Request: Session already initialized. Reuse the existing session or omit MCP-Session-Id to start a new one.' },
+      // Gracefully return a JSON-RPC error instead of a transport-level 400 so
+      // clients can keep the connection alive without triggering retries.
+      return res.status(200).json({
+        jsonrpc: '2.0',
+        id: req.body?.id ?? null,
+        error: {
+          code: -32600,
+          message: 'Server already initialized. Reuse the existing session or omit MCP-Session-Id to start a new one.',
+        },
       });
     }
 
