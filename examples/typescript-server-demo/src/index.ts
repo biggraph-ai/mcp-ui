@@ -9,6 +9,30 @@ import { randomUUID } from 'crypto';
 const app = express();
 const port = 3000;
 
+// Placeholder model endpoint for HTML transformation.
+// Replace this with your actual model provider URL or client initialization.
+const MODEL_ENDPOINT = process.env.MODEL_ENDPOINT;
+
+async function transformHtmlWithModel(html: string, prompt: string): Promise<string> {
+  if (!MODEL_ENDPOINT) {
+    console.warn('MODEL_ENDPOINT is not configured. Returning the original HTML.');
+    return html;
+  }
+
+  const response = await fetch(MODEL_ENDPOINT, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ html, prompt }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Model request failed with status ${response.status}`);
+  }
+
+  const data = await response.json();
+  return data.html ?? html;
+}
+
 app.use(cors({
   origin: '*',
   exposedHeaders: ['Mcp-Session-Id'],
@@ -51,58 +75,24 @@ app.post('/mcp', async (req, res) => {
       version: "1.0.0"
     });
 
-    // Register our tools on the new server instance.
-    server.registerTool('showExternalUrl', {
-      title: 'Show External URL',
-      description: 'Creates a UI resource displaying an external URL (example.com).',
-      inputSchema: {},
-    }, async () => {
-      // Create the UI resource to be returned to the client
-      // This is the only MCP-UI specific code in this example
-      const uiResource = createUIResource({
-        uri: 'ui://greeting',
-        content: { type: 'externalUrl', iframeUrl: 'https://example.com' },
-        encoding: 'text',
-      });
-
-      return {
-        content: [uiResource],
-      };
-    });
-
-    server.registerTool('showRawHtml', {
-      title: 'Show Raw HTML',
-      description: 'Creates a UI resource displaying raw HTML.',
-      inputSchema: {},
-    }, async () => {
-      const uiResource = createUIResource({
-        uri: 'ui://raw-html-demo',
-        content: { type: 'rawHtml', htmlString: '<h1>Hello from Raw HTML</h1>' },
-        encoding: 'text',
-      });
-
-      return {
-        content: [uiResource],
-      };
-    });
-
-    server.registerTool('showRemoteDom', {
-      title: 'Show Remote DOM',
-      description: 'Creates a UI resource displaying a remote DOM script.',
-      inputSchema: {},
-    }, async () => {
-      const remoteDomScript = `
-        const p = document.createElement('ui-text');
-        p.textContent = 'This is a remote DOM element from the server.';
-        root.appendChild(p);
-      `;
-      const uiResource = createUIResource({
-        uri: 'ui://remote-dom-demo',
-        content: {
-          type: 'remoteDom',
-          script: remoteDomScript,
-          framework: 'react',
+    // Register a single tool for transforming HTML with a model provider.
+    server.registerTool('transformHtml', {
+      title: 'Transform HTML',
+      description: 'Transforms HTML based on a prompt using a model provider.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          html: { type: 'string', description: 'The source HTML to transform.' },
+          prompt: { type: 'string', description: 'Instructions describing how to transform the HTML.' },
         },
+        required: ['html', 'prompt'],
+      },
+    }, async ({ html, prompt }: { html: string; prompt: string }) => {
+      const transformedHtml = await transformHtmlWithModel(html, prompt);
+
+      const uiResource = createUIResource({
+        uri: 'ui://transformed',
+        content: { type: 'rawHtml', htmlString: transformedHtml },
         encoding: 'text',
       });
 
