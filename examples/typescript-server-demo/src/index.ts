@@ -15,7 +15,7 @@ const port = 3000;
 // Base URL for the model endpoint (defaults to Ollama's OpenAI-compatible API).
 const MODEL_ENDPOINT = 'http://192.222.51.44:11434/v1';
 const LOG_BASE_DIR = path.resolve(process.cwd(), 'html-logs');
-const ERASER_API_URL = 'https://diagram.eraser.io/api/generate';
+const ERASER_API_URL = 'https://app.eraser.io/api/render/prompt';
 
 type ChatCompletionResponse = {
   choices?: Array<{
@@ -72,9 +72,26 @@ async function transformHtmlWithModel(html: string, prompt: string): Promise<str
   }
 }
 
-async function generateEraserDiagram(prompt: string, apiKey?: string): Promise<string> {
+async function generateEraserDiagram(prompt: string, screenshotBase64?: string, apiKey?: string): Promise<string> {
   if (!apiKey) {
     throw new Error('Eraser API key missing. Set ERASER_API_KEY or provide apiKey in the tool input.');
+  }
+
+  const body: {
+    text: string;
+    attachments?: Array<{ filename: string; mimeType: string; content: string }>;
+  } = {
+    text: prompt || 'Generate a diagram based on this screenshot',
+  };
+
+  if (screenshotBase64?.trim()) {
+    body.attachments = [
+      {
+        filename: 'screenshot.png',
+        mimeType: 'image/png',
+        content: screenshotBase64,
+      },
+    ];
   }
 
   const response = await fetch(ERASER_API_URL, {
@@ -83,7 +100,7 @@ async function generateEraserDiagram(prompt: string, apiKey?: string): Promise<s
       Authorization: `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ prompt }),
+    body: JSON.stringify(body),
   });
 
   if (!response.ok) {
@@ -91,8 +108,26 @@ async function generateEraserDiagram(prompt: string, apiKey?: string): Promise<s
     throw new Error(`Eraser API request failed with status ${response.status}: ${errorBody}`);
   }
 
-  const data = (await response.json()) as { imageUrl?: string; diagramUrl?: string; downloadUrl?: string };
-  const imageUrl = data.imageUrl ?? data.diagramUrl ?? data.downloadUrl;
+  const data = (await response.json()) as {
+    imageUrl?: string;
+    diagramUrl?: string;
+    downloadUrl?: string;
+    renderUrl?: string;
+    url?: string;
+    resultUrl?: string;
+    outputUrl?: string;
+    attachments?: Array<{ url?: string }>;
+  };
+
+  const imageUrl =
+    data.imageUrl ??
+    data.renderUrl ??
+    data.url ??
+    data.diagramUrl ??
+    data.downloadUrl ??
+    data.resultUrl ??
+    data.outputUrl ??
+    data.attachments?.find((attachment) => attachment.url)?.url;
 
   if (!imageUrl) {
     throw new Error('Eraser API did not return an image URL.');
@@ -226,15 +261,31 @@ app.post('/mcp', async (req, res) => {
           'Creates a diagram image using the Eraser AI Diagram API and displays it as a UI resource.',
         inputSchema: {
           prompt: z.string().describe('Description of the diagram to generate.'),
+          screenshotBase64: z
+            .string()
+            .optional()
+            .describe('Optional base64-encoded PNG screenshot to render into a diagram.'),
           apiKey: z
             .string()
             .optional()
             .describe('Optional Eraser API key. Uses ERASER_API_KEY environment variable if omitted.'),
         },
       },
-      async ({ prompt, apiKey }: { prompt: string; apiKey?: string }) => {
+      async ({
+        prompt,
+        apiKey,
+        screenshotBase64,
+      }: {
+        prompt: string;
+        apiKey?: string;
+        screenshotBase64?: string;
+      }) => {
         try {
-          const imageUrl = await generateEraserDiagram(prompt, apiKey ?? process.env.ERASER_API_KEY);
+          const imageUrl = await generateEraserDiagram(
+            prompt,
+            screenshotBase64,
+            apiKey ?? process.env.ERASER_API_KEY,
+          );
           const safePrompt = escapeHtml(prompt);
           const htmlString = `
             <section style="font-family: sans-serif; padding: 16px; max-width: 720px; margin: 0 auto;">
