@@ -3,7 +3,7 @@
 This barebones server demonstrates how to use `@mcp-ui/server` to generate UI resources from two tools:
 
 - `transformHtml`, which accepts `html` and `prompt` input, forwards them to your model provider, and returns MCP-UI raw HTML output.
-- `generate_eraser_diagram`, which calls the Eraser AI Diagram API to create a diagram image and returns it as a rendered UI resource. Provide an `apiKey` input or set the `ERASER_API_KEY` environment variable before invoking it.
+- `generate_eraser_diagram`, which calls the Eraser AI Diagram API to create a diagram image (optionally from a base64-encoded PNG attachment) and returns it as a rendered UI resource. Provide an `apiKey` input or set the `ERASER_API_KEY` environment variable before invoking it.
 
 For a detailed explanation of how this server works, see the [TypeScript Server Walkthrough](https://mcpui.dev/guide/server/typescript/walkthrough.html). Note that the walkthrough uses multiple tools for illustration, while this demo focuses on a single HTML-transforming tool.
 
